@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+prometheus_client
+gunicorn
+uvloop
+PyYAML

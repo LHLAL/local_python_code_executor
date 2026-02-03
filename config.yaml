@@ -1,0 +1,23 @@
+server:
+  port: 8000
+  workers: 4
+  max_concurrent_requests: 10
+  max_queue_size: 20
+
+# 多语言运行时配置
+runtimes:
+  python3:
+    command: "/usr/bin/python3"
+    enabled: true
+  python311:
+    command: "/usr/bin/python3.11"
+    enabled: true
+  nodejs:
+    command: "/home/ubuntu/.nvm/versions/node/v22.13.0/bin/node"
+    enabled: true
+
+resource_limits:
+  cpu_time_limit: 10      # 秒
+  memory_limit_mb: 256    # MB
+  file_size_limit_kb: 1024 # KB
+  timeout: 10             # 进程等待超时
