@@ -1,0 +1,21 @@
+nohup: ignoring input
+Starting server on port 8000 with 4 workers...
+[2026-02-03 20:58:55 -0500] [18417] [INFO] Starting gunicorn 25.0.1
+[2026-02-03 20:58:55 -0500] [18417] [INFO] Listening at: http://0.0.0.0:8000 (18417)
+[2026-02-03 20:58:55 -0500] [18417] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2026-02-03 20:58:55 -0500] [18422] [INFO] Booting worker with pid: 18422
+[2026-02-03 20:58:55 -0500] [18423] [INFO] Booting worker with pid: 18423
+[2026-02-03 20:58:55 -0500] [18424] [INFO] Booting worker with pid: 18424
+[2026-02-03 20:58:55 -0500] [18425] [INFO] Booting worker with pid: 18425
+[2026-02-03 20:58:56 -0500] [18423] [INFO] Started server process [18423]
+[2026-02-03 20:58:56 -0500] [18423] [INFO] Waiting for application startup.
+[2026-02-03 20:58:56 -0500] [18423] [INFO] Application startup complete.
+[2026-02-03 20:58:56 -0500] [18422] [INFO] Started server process [18422]
+[2026-02-03 20:58:56 -0500] [18422] [INFO] Waiting for application startup.
+[2026-02-03 20:58:56 -0500] [18422] [INFO] Application startup complete.
+[2026-02-03 20:58:56 -0500] [18424] [INFO] Started server process [18424]
+[2026-02-03 20:58:56 -0500] [18424] [INFO] Waiting for application startup.
+[2026-02-03 20:58:56 -0500] [18424] [INFO] Application startup complete.
+[2026-02-03 20:58:56 -0500] [18425] [INFO] Started server process [18425]
+[2026-02-03 20:58:56 -0500] [18425] [INFO] Waiting for application startup.
+[2026-02-03 20:58:56 -0500] [18425] [INFO] Application startup complete.

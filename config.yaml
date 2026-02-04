@@ -9,12 +9,15 @@ runtimes:
   python3:
     command: "/usr/bin/python3"
     enabled: true
+    allowed_packages: ["json", "base64", "math", "time", "requests"]
   python311:
     command: "/usr/bin/python3.11"
     enabled: true
+    allowed_packages: ["json", "base64", "math", "time"]
   nodejs:
     command: "/home/ubuntu/.nvm/versions/node/v22.13.0/bin/node"
     enabled: true
+    allowed_packages: ["fs", "path", "crypto"]
 
 resource_limits:
   cpu_time_limit: 10      # 秒

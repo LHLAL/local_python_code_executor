@@ -36,7 +36,7 @@ class RunResponse(BaseModel):
 
 @app.get("/v1/sandbox/health")
 async def health_check():
-    return {"status": "ok", "runtimes": config["runtimes"]}
+    return {"status": "healthy", "runtimes": config["runtimes"]}
 
 @app.get("/metrics")
 async def metrics():

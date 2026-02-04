@@ -1,6 +1,8 @@
 import yaml
 import os
+import copy
 
+# 完整的默认配置，涵盖所有生产级参数
 DEFAULT_CONFIG = {
     "server": {
         "port": 8000,
@@ -8,25 +10,51 @@ DEFAULT_CONFIG = {
         "max_concurrent_requests": 10,
         "max_queue_size": 20
     },
+    "runtimes": {
+        "python3": {
+            "command": "/usr/bin/python3",
+            "enabled": True,
+            "allowed_packages": ["json", "base64", "math", "time", "requests", "re", "ast"]
+        },
+        "nodejs": {
+            "command": "/usr/bin/node",
+            "enabled": True,
+            "allowed_packages": ["fs", "path", "crypto", "buffer", "util"]
+        }
+    },
     "resource_limits": {
         "cpu_time_limit": 10,
-        "memory_limit_mb": 256,
+        "memory_limit_mb": 512,
         "file_size_limit_kb": 1024,
         "timeout": 10
     }
 }
 
 def load_config():
+    # 使用深拷贝避免修改全局默认模板
+    final_config = copy.deepcopy(DEFAULT_CONFIG)
+    
     config_path = os.getenv("SANDBOX_CONFIG_PATH", "config.yaml")
     if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            user_config = yaml.safe_load(f)
-            # 深度合并或简单覆盖
-            for key, value in user_config.items():
-                if key in DEFAULT_CONFIG and isinstance(value, dict):
-                    DEFAULT_CONFIG[key].update(value)
-                else:
-                    DEFAULT_CONFIG[key] = value
-    return DEFAULT_CONFIG
+        try:
+            with open(config_path, "r") as f:
+                user_config = yaml.safe_load(f)
+                if user_config:
+                    # 递归合并配置
+                    merge_configs(final_config, user_config)
+        except Exception as e:
+            print(f"Warning: Failed to load config from {config_path}: {e}. Using defaults.")
+            
+    return final_config
+
+def merge_configs(base, override):
+    """
+    递归合并两个字典配置
+    """
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            merge_configs(base[key], value)
+        else:
+            base[key] = value
 
 config = load_config()

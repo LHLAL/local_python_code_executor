@@ -8,23 +8,61 @@ import signal
 import base64
 import json
 import subprocess
-from typing import Dict, Any, Optional
+import ast
+import re
+from typing import Dict, Any, Optional, List, Set
 from .config import config
 
 def set_resource_limits(is_nodejs=False):
     limits = config["resource_limits"]
     cpu_limit = limits["cpu_time_limit"]
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit + 2))
-    
-    # Node.js 22 在 Linux 下需要较大的虚拟内存空间来预留 CodeRange
     mem_limit = max(limits["memory_limit_mb"], 1024) * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
-    
     file_limit = limits["file_size_limit_kb"] * 1024
     resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
-    
     if not is_nodejs:
         resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+
+class SecurityChecker:
+    @staticmethod
+    def check_python_imports(code: str, allowed: List[str]) -> Optional[str]:
+        try:
+            tree = ast.parse(code)
+            allowed_set = set(allowed)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        base_module = alias.name.split('.')[0]
+                        if base_module not in allowed_set:
+                            return f"Unsupported package: {base_module}"
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        base_module = node.module.split('.')[0]
+                        if base_module not in allowed_set:
+                            return f"Unsupported package: {base_module}"
+            return None
+        except Exception as e:
+            return f"Code syntax error: {str(e)}"
+
+    @staticmethod
+    def check_nodejs_imports(code: str, allowed: List[str]) -> Optional[str]:
+        # 使用正则简单匹配 require('pkg') 或 import ... from 'pkg'
+        allowed_set = set(allowed)
+        
+        # 匹配 require('pkg') 或 require("pkg")
+        require_matches = re.findall(r"require\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", code)
+        # 匹配 import ... from 'pkg'
+        import_matches = re.findall(r"from\s*['\"]([^'\"]+)['\"]", code)
+        # 匹配 import('pkg')
+        dynamic_import_matches = re.findall(r"import\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", code)
+        
+        all_imports = set(require_matches + import_matches + dynamic_import_matches)
+        for pkg in all_imports:
+            base_module = pkg.split('/')[0]
+            if base_module not in allowed_set:
+                return f"Unsupported package: {base_module}"
+        return None
 
 class BaseRunner:
     def run(self, code: str, obj_base64: Optional[str], runtime: str) -> Dict[str, Any]:
@@ -32,6 +70,11 @@ class BaseRunner:
 
 class PythonRunner(BaseRunner):
     def run(self, code: str, obj_base64: Optional[str], runtime: str) -> Dict[str, Any]:
+        allowed = config["runtimes"].get(runtime, {}).get("allowed_packages", [])
+        error = SecurityChecker.check_python_imports(code, allowed)
+        if error:
+            return {"stdout": "", "error": error, "success": False}
+
         cmd = config["runtimes"].get(runtime, {}).get("command", "python3")
         indented_code = "\n    ".join(code.splitlines())
         wrapper_script = """
@@ -94,8 +137,12 @@ if __name__ == "__main__":
 
 class NodeJSRunner(BaseRunner):
     def run(self, code: str, obj_base64: Optional[str], runtime: str) -> Dict[str, Any]:
+        allowed = config["runtimes"].get(runtime, {}).get("allowed_packages", [])
+        error = SecurityChecker.check_nodejs_imports(code, allowed)
+        if error:
+            return {"stdout": "", "error": error, "success": False}
+
         cmd = config["runtimes"].get(runtime, {}).get("command", "node")
-        # 移除双花括号，使用 replace 注入
         wrapper_script = """
 const base64 = "{obj_b64}";
 let obj = null;
