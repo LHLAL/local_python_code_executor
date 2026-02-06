@@ -17,10 +17,13 @@ def set_resource_limits(is_nodejs=False):
     limits = config["resource_limits"]
     cpu_limit = limits["cpu_time_limit"]
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit + 2))
+    
     mem_limit = max(limits["memory_limit_mb"], 1024) * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+    
     file_limit = limits["file_size_limit_kb"] * 1024
     resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
+    
     if not is_nodejs:
         resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
 
@@ -47,14 +50,9 @@ class SecurityChecker:
 
     @staticmethod
     def check_nodejs_imports(code: str, allowed: List[str]) -> Optional[str]:
-        # 使用正则简单匹配 require('pkg') 或 import ... from 'pkg'
         allowed_set = set(allowed)
-        
-        # 匹配 require('pkg') 或 require("pkg")
         require_matches = re.findall(r"require\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", code)
-        # 匹配 import ... from 'pkg'
         import_matches = re.findall(r"from\s*['\"]([^'\"]+)['\"]", code)
-        # 匹配 import('pkg')
         dynamic_import_matches = re.findall(r"import\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", code)
         
         all_imports = set(require_matches + import_matches + dynamic_import_matches)
@@ -65,17 +63,17 @@ class SecurityChecker:
         return None
 
 class BaseRunner:
-    def run(self, code: str, obj_base64: Optional[str], runtime: str) -> Dict[str, Any]:
+    def run(self, code: str, obj_base64: Optional[str], language: str) -> Dict[str, Any]:
         raise NotImplementedError
 
 class PythonRunner(BaseRunner):
-    def run(self, code: str, obj_base64: Optional[str], runtime: str) -> Dict[str, Any]:
-        allowed = config["runtimes"].get(runtime, {}).get("allowed_packages", [])
+    def run(self, code: str, obj_base64: Optional[str], language: str) -> Dict[str, Any]:
+        allowed = config["runtimes"].get(language, {}).get("allowed_packages", [])
         error = SecurityChecker.check_python_imports(code, allowed)
         if error:
             return {"stdout": "", "error": error, "success": False}
 
-        cmd = config["runtimes"].get(runtime, {}).get("command", "python3")
+        cmd = config["runtimes"].get(language, {}).get("command", "python3")
         indented_code = "\n    ".join(code.splitlines())
         wrapper_script = """
 import base64
@@ -106,7 +104,8 @@ def run_user_code():
             print(f"Error in main(obj): {e}", file=sys.stderr)
             raise e
     else:
-        print("Warning: main(obj) not found in code", file=sys.stderr)
+        # 如果没有 main 函数，直接执行的代码已经运行了
+        pass
 
 if __name__ == "__main__":
     run_user_code()
@@ -136,13 +135,13 @@ if __name__ == "__main__":
             return {"stdout": "", "error": str(e), "success": False}
 
 class NodeJSRunner(BaseRunner):
-    def run(self, code: str, obj_base64: Optional[str], runtime: str) -> Dict[str, Any]:
-        allowed = config["runtimes"].get(runtime, {}).get("allowed_packages", [])
+    def run(self, code: str, obj_base64: Optional[str], language: str) -> Dict[str, Any]:
+        allowed = config["runtimes"].get(language, {}).get("allowed_packages", [])
         error = SecurityChecker.check_nodejs_imports(code, allowed)
         if error:
             return {"stdout": "", "error": error, "success": False}
 
-        cmd = config["runtimes"].get(runtime, {}).get("command", "node")
+        cmd = config["runtimes"].get(language, {}).get("command", "node")
         wrapper_script = """
 const base64 = "{obj_b64}";
 let obj = null;
@@ -166,8 +165,6 @@ async function run() {
             process.stderr.write("Error in main(obj): " + e + "\\n");
             process.exit(1);
         }
-    } else {
-        process.stderr.write("Warning: main(obj) not found\\n");
     }
 }
 run();
@@ -198,10 +195,10 @@ run();
 
 class ExecutorFactory:
     @staticmethod
-    def get_runner(runtime: str) -> BaseRunner:
-        if runtime.startswith("python"):
+    def get_runner(language: str) -> BaseRunner:
+        if language.startswith("python"):
             return PythonRunner()
-        elif runtime == "nodejs":
+        elif language == "nodejs":
             return NodeJSRunner()
         else:
-            raise ValueError(f"Unsupported runtime: {runtime}")
+            raise ValueError(f"Unsupported language: {language}")

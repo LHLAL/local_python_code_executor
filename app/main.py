@@ -1,97 +1,120 @@
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
 import time
 import asyncio
-from typing import Optional
-from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel
-from .executor import ExecutorFactory
-from .config import config
+from concurrent.futures import ThreadPoolExecutor
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 
-app = FastAPI(title="Multi-Runtime Sandbox")
+from .executor import ExecutorFactory
+from .config import config
 
-# 并发控制
+app = FastAPI(title="Dify-Compatible Sandbox Executor")
+
+# Prometheus Metrics
+REQUESTS_TOTAL = Counter("sandbox_requests_total", "Total sandbox requests", ["language", "endpoint"])
+REQUEST_DURATION = Histogram("sandbox_request_duration_seconds", "Sandbox request duration", ["language"])
+CONCURRENT_REQUESTS = Gauge("sandbox_concurrent_requests", "Current concurrent requests")
+QUEUE_SIZE = Gauge("sandbox_queue_size", "Current queue size")
+
+# 线程池和信号量控制并发
+executor_pool = ThreadPoolExecutor(max_workers=config["server"]["workers"])
 semaphore = asyncio.Semaphore(config["server"]["max_concurrent_requests"])
 current_waiting = 0
 
-# 指标
-REQUEST_COUNT = Counter("sandbox_requests_total", "Total requests", ["method", "endpoint", "status", "runtime"])
-REQUEST_LATENCY = Histogram("sandbox_request_duration_seconds", "Latency", ["endpoint", "runtime"])
-CONCURRENT_GAUGE = Gauge("sandbox_concurrent_requests", "Current concurrent requests")
-QUEUE_GAUGE = Gauge("sandbox_queue_size", "Current requests in queue")
-
 class RunRequest(BaseModel):
+    language: str = "python3"  # 对齐 dify-sandbox 使用 language
     code: str
-    runtime: str = "python3"
-    obj: Optional[str] = None # Base64 encoded string
+    preload: Optional[str] = "" # 预留支持
+    obj: Optional[str] = None   # Base64 编码的输入
 
 class RunResponseData(BaseModel):
     stdout: str
     error: str
 
 class RunResponse(BaseModel):
-    code: int
-    message: str
+    code: int = 0
+    message: str = "success"
     data: RunResponseData
 
 @app.get("/v1/sandbox/health")
-async def health_check():
-    return {"status": "healthy", "runtimes": config["runtimes"]}
+async def health():
+    return {
+        "status": "healthy",
+        "runtimes": config["runtimes"]
+    }
 
 @app.get("/metrics")
 async def metrics():
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.post("/v1/sandbox/run", response_model=RunResponse)
 async def run_code(request: RunRequest):
     global current_waiting
     
-    runtime = request.runtime
-    if runtime not in config["runtimes"] or not config["runtimes"][runtime].get("enabled", False):
-        raise HTTPException(status_code=400, detail=f"Runtime {runtime} is not supported or enabled")
+    # 检查 language 是否支持
+    if request.language not in config["runtimes"]:
+        # 尝试兼容性映射
+        if request.language == "python" and "python3" in config["runtimes"]:
+            request.language = "python3"
+        else:
+            return RunResponse(
+                code=400, 
+                message=f"Unsupported language: {request.language}", 
+                data=RunResponseData(stdout="", error=f"Unsupported language: {request.language}")
+            )
 
+    # 队列长度检查
     if current_waiting >= config["server"]["max_queue_size"]:
-        REQUEST_COUNT.labels(method="POST", endpoint="/run", status="rejected_queue_full", runtime=runtime).inc()
-        raise HTTPException(status_code=429, detail="Server busy: queue full")
+        raise HTTPException(status_code=429, detail="Too Many Requests: Queue Full")
 
     current_waiting += 1
-    QUEUE_GAUGE.set(current_waiting)
+    QUEUE_SIZE.set(current_waiting)
+    
+    REQUESTS_TOTAL.labels(language=request.language, endpoint="/run").inc()
     
     try:
         async with semaphore:
             current_waiting -= 1
-            QUEUE_GAUGE.set(current_waiting)
-            CONCURRENT_GAUGE.inc()
-            
-            REQUEST_COUNT.labels(method="POST", endpoint="/run", status="received", runtime=runtime).inc()
+            QUEUE_SIZE.set(current_waiting)
+            CONCURRENT_REQUESTS.inc()
             
             start_time = time.time()
             
-            # 获取对应的执行器
-            runner = ExecutorFactory.get_runner(runtime)
-            
-            # 在线程池中执行同步的 runner.run
+            # 使用线程池运行阻塞的执行器
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, runner.run, request.code, request.obj, runtime)
+            runner = ExecutorFactory.get_runner(request.language)
             
-            latency = time.time() - start_time
-            REQUEST_LATENCY.labels(endpoint="/run", runtime=runtime).observe(latency)
+            # 执行代码
+            result = await loop.run_in_executor(
+                executor_pool, 
+                runner.run, 
+                request.code, 
+                request.obj, 
+                request.language
+            )
             
-            CONCURRENT_GAUGE.dec()
-            status = "success" if result["success"] else "error"
-            REQUEST_COUNT.labels(method="POST", endpoint="/run", status=status, runtime=runtime).inc()
+            duration = time.time() - start_time
+            REQUEST_DURATION.labels(language=request.language).observe(duration)
+            
+            CONCURRENT_REQUESTS.dec()
             
             return RunResponse(
                 code=0,
                 message="success",
-                data=RunResponseData(stdout=result["stdout"], error=result["error"])
+                data=RunResponseData(
+                    stdout=result.get("stdout", ""),
+                    error=result.get("error", "")
+                )
             )
     except Exception as e:
-        if current_waiting > 0: current_waiting -= 1
-        CONCURRENT_GAUGE.set(0)
-        REQUEST_COUNT.labels(method="POST", endpoint="/run", status="internal_error", runtime=runtime).inc()
+        if current_waiting > 0:
+            current_waiting -= 1
+            QUEUE_SIZE.set(current_waiting)
+        CONCURRENT_REQUESTS.set(0) # 重置并发计数
         return RunResponse(
-            code=500,
-            message="internal_error",
+            code=500, 
+            message="Internal Server Error", 
             data=RunResponseData(stdout="", error=str(e))
         )

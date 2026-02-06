@@ -1,94 +1,73 @@
-# Multi-Runtime Sandbox Executor (V4 Final)
+# Dify-Compatible Sandbox Executor (Enterprise Edition)
 
-一个高性能、安全、可扩展的多语言代码执行器，支持 Python 和 Node.js，专为生产环境和国产化系统（麒麟 V10）设计。
+一个高性能、安全、可扩展的多语言代码执行沙箱，完全对齐 **dify-sandbox** API 标准，专为生产环境和国产化（麒麟 V10/红帽）环境优化。
 
 ## 核心特性
 
-- **多语言支持**: 插件化架构，支持 Python3、Python3.11 及 Node.js。
-- **`main(obj)` 模式**: 支持通过函数入口调用，自动处理 Base64 解码的 JSON 输入。
-- **生产级安全隔离**: 
-  - 使用 `ulimit` (resource) 限制 CPU、内存、文件和进程数。
-  - 针对 Node.js 22 优化了虚拟内存预留限制。
-- **高并发保障**: 基于信号量和请求队列的流量控制，超出负载自动返回 `429`。
-- **可观测性**: 集成 Prometheus 指标接口 (`/metrics`)。
-- **动态配置**: 支持外部 `config.yaml` 挂载。
+- **Dify 接口对齐**: 深度适配 `v1/sandbox/run` 接口，支持 `language`, `code`, `obj` (Base64) 等核心参数。
+- **多语言执行引擎**: 
+  - **Python**: 支持 `main(obj)` 结构化调用，适配 Python 3.9/3.10+。
+  - **Node.js**: 支持 `async/await` 异步执行，适配 Node.js 18/20+。
+- **生产级安全隔离**:
+  - **资源配额**: 严格限制 CPU 时间、内存使用量、文件写入大小。
+  - **依赖审计**: 基于静态分析（AST）的 `import/require` 包白名单拦截机制。
+  - **非 Root 运行**: 容器内采用普通用户权限执行，防止逃逸。
+- **高可用保障**:
+  - **并发控制**: 集成 Gunicorn 多进程管理，API 层支持信号量并发限制。
+  - **过载保护**: 内置请求队列，超载时自动返回 `429 Too Many Requests`。
+- **全面可观测性**: 提供 `/metrics` 接口，原生对接 Prometheus 监控。
 
 ---
 
-## 接口文档
+## 接口指南
 
-### 1. 健康检查
-- **URL**: `/v1/sandbox/health`
-- **Method**: `GET`
-- **Response**: 返回当前支持的运行时及配置状态。
-
-### 2. 代码执行
-- **URL**: `/v1/sandbox/run`
-- **Method**: `POST`
-- **Request Body**:
-| 参数 | 类型 | 必选 | 说明 |
-| :--- | :--- | :--- | :--- |
-| `code` | string | 是 | 用户代码内容 |
-| `runtime` | string | 否 | 运行时环境，默认 `python3`。可选: `python3`, `python311`, `nodejs` |
-| `obj` | string | 否 | Base64 编码的 JSON 字符串，将作为参数传递给 `main(obj)` |
-
-- **Response Body**:
+### 1. 代码执行接口
+- **URL**: `POST /v1/sandbox/run`
+- **Body**:
+```json
+{
+  "language": "python3",
+  "code": "def main(obj): return f'Result: {obj.get(\"x\") + obj.get(\"y\")}'",
+  "obj": "eyJ4IjogMTAsICJ5IjogMjB9"
+}
+```
+- **Response**:
 ```json
 {
   "code": 0,
   "message": "success",
   "data": {
-    "stdout": "执行输出内容",
-    "error": "错误详情（如果有）"
+    "stdout": "Result: 30\n",
+    "error": ""
   }
 }
 ```
 
-### 3. 监控指标
-- **URL**: `/metrics`
-- **Method**: `GET`
-- **Metrics**:
-  - `sandbox_concurrent_requests`: 当前并发执行数。
-  - `sandbox_queue_size`: 当前队列积压数。
-  - `sandbox_requests_total`: 累计请求计数。
-
----
-
-## 测试用例
-
-### Python `main(obj)` 示例
-**Request**:
-```json
-{
-  "runtime": "python3",
-  "code": "def main(obj):\n    return f'Hello {obj[\"name\"]}'",
-  "obj": "eyJuYW1lIjogIk1hbnVzIn0="
-}
+### 2. 复杂 Python 场景示例
+通过 `obj` 传入复杂嵌套字典，代码内部处理逻辑并返回 JSON 字符串作为多出参：
+```python
+# code 内容
+import json
+def main(obj):
+    params = obj.get('params', {})
+    result = params.get('a') * params.get('b')
+    return json.dumps({"calc_result": result, "status": "ok"})
 ```
-**Output**: `Hello Manus`
-
-### Node.js `main(obj)` 示例
-**Request**:
-```json
-{
-  "runtime": "nodejs",
-  "code": "async function main(obj) { return 'NodeJS: ' + obj.id; }",
-  "obj": "eyJpZCI6IDEyM30="
-}
-```
-**Output**: `NodeJS: 123`
 
 ---
 
 ## 自动化测试
 
-项目根目录下提供了 `test_sandbox.py`，包含完整的单元测试：
-1. **基础功能测试**: 验证 Python/NodeJS 正常输出。
-2. **Base64 参数测试**: 验证 `main(obj)` 参数传递。
-3. **资源限制测试**: 验证超时 (Timeout) 和内存溢出 (OOM) 拦截。
-4. **并发压力测试**: 验证 429 队列拒绝机制。
+项目内置了 `test_sandbox.py`，涵盖以下 7 大核心场景：
+1. **健康检查**: 验证系统存活状态。
+2. **基础执行**: 验证简单的代码输出。
+3. **复杂 I/O**: 验证多参数传入、Base64 解码及结构化数据返回。
+4. **Node.js 异步**: 验证 Node.js 异步函数执行。
+5. **安全拦截**: 验证非法包（如 `os`）导入拦截。
+6. **资源限制**: 验证执行超时自动终止。
+7. **压力测试**: 验证高并发下的队列保护机制。
 
-**运行测试**:
+**执行测试**:
 ```bash
 python3 test_sandbox.py
 ```
@@ -97,13 +76,15 @@ python3 test_sandbox.py
 
 ## 部署说明
 
-### Docker 部署
-```bash
-docker build -t sandbox-v4 .
-docker run -d -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml sandbox-v4
-```
+### 1. 配置文件 (`config.yaml`)
+支持通过挂载外部配置文件动态调整：
+- `server.max_concurrent_requests`: 最大并行执行数。
+- `runtimes.python3.allowed_packages`: 允许导入的包列表。
 
-### 4. 包白名单安全机制 (Security Whitelist)
-服务会通过静态分析（Python 使用 `ast`，Node.js 使用正则）检查代码中的依赖。
-- **拦截逻辑**: 只有在 `config.yaml` 的 `allowed_packages` 列表中定义的包才允许被 `import` 或 `require`。
-- **错误提示**: 若使用未授权的包，返回 `{"data": {"error": "Unsupported package: xxx"}}`。
+### 2. Docker 部署 (红帽/麒麟适配)
+```bash
+docker build -t py-sandbox-executor .
+docker run -d -p 8000:8000 \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  py-sandbox-executor
+```

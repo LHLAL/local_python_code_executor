@@ -1,30 +1,42 @@
-# 使用麒麟 V10 基础镜像 (基于 RedHat/CentOS)
-FROM centos:7
+# 假设基础镜像已预装 Python 3.10
+# 示例：FROM your-custom-python310-base-image:latest
+FROM registry.access.redhat.com/ubi8/ubi:latest
 
-# 设置工作目录
+LABEL maintainer="Manus Sandbox Team"
+
 WORKDIR /app
 
-# 安装 Python 3, Node.js 和必要工具
-# 注意：在 CentOS 7 上安装较新版本可能需要额外的 repo
-RUN yum install -y epel-release && \
-    yum install -y python3 python3-pip nodejs && \
-    yum clean all
+USER root
 
-# 复制依赖文件并安装
+# 由于 Python 3.10 已预装，我们仅需安装：
+# 1. 编译工具 (gcc/make) 用于部分 Python 库的编译安装
+# 2. 进程管理工具 (procps-ng) 用于 entrypoint.sh 中的进程检查
+# 3. Node.js 运行时
+RUN dnf install -y \
+    gcc \
+    gcc-c++ \
+    make \
+    procps-ng \
+    && dnf module install -y nodejs:18 \
+    && dnf clean all
+
+# 确保 python3 指向 3.10 (根据您基础镜像的实际路径调整)
+# RUN ln -sf /usr/bin/python3.10 /usr/bin/python3
+
+# 复制依赖并安装
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+# 使用预装的 pip 运行
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
-# 复制应用代码和默认配置
-COPY app/ ./app/
-COPY config.yaml .
-COPY entrypoint.sh .
+COPY . .
 
-# 赋予执行权限并创建非 root 用户
-RUN chmod +x entrypoint.sh && useradd -m sandboxuser
-USER sandboxuser
+# 安全配置
+RUN useradd -m sandboxuser && \
+    chown -R sandboxuser:sandboxuser /app && \
+    chmod +x /app/entrypoint.sh
 
-# 暴露端口
 EXPOSE 8000
 
-# 启动脚本
-ENTRYPOINT ["./entrypoint.sh"]
+USER sandboxuser
+
+ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
