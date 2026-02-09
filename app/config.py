@@ -8,7 +8,8 @@ DEFAULT_CONFIG = {
         "port": 8000,
         "workers": 4,
         "max_concurrent_requests": 10,
-        "max_queue_size": 20
+        "max_queue_size": 20,
+        "log_path": "/home/ubuntu/py-sandbox-executor/sandbox.log"
     },
     "runtimes": {
         "python3": {

@@ -3,12 +3,33 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import time
 import asyncio
+import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from fastapi.responses import Response
 
 from .executor import ExecutorFactory
 from .config import config
+
+# 配置日志
+logger = logging.getLogger("sandbox")
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# 输出到标准输出（用于 docker logs）
+stdout_handler = logging.StreamHandler(sys.stdout)
+stdout_handler.setFormatter(formatter)
+logger.addHandler(stdout_handler)
+
+# 输出到文件
+file_path = config["server"].get("log_path", "/home/ubuntu/py-sandbox-executor/sandbox.log")
+try:
+    file_handler = logging.FileHandler(file_path)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+except Exception as e:
+    print(f"Warning: Failed to setup file log at {file_path}: {e}")
 
 app = FastAPI(title="Dify-Standard Sandbox Executor")
 
@@ -51,18 +72,22 @@ async def metrics():
 @app.post("/v1/sandbox/run", response_model=RunResponse)
 async def run_code(request: RunRequest):
     global current_waiting
+    start_time = time.time()
     
     if request.language not in config["runtimes"]:
         if request.language == "python" and "python3" in config["runtimes"]:
             request.language = "python3"
         else:
+            error_msg = f"Unsupported language: {request.language}"
+            logger.error(f"Request failed: {error_msg}")
             return RunResponse(
                 code=400, 
-                message=f"Unsupported language: {request.language}", 
-                data=RunResponseData(stdout="", error=f"Unsupported language: {request.language}")
+                message=error_msg, 
+                data=RunResponseData(stdout="", error=error_msg)
             )
 
     if current_waiting >= config["server"]["max_queue_size"]:
+        logger.warning(f"Queue full: {current_waiting} requests waiting")
         raise HTTPException(status_code=429, detail="Too Many Requests: Queue Full")
 
     current_waiting += 1
@@ -76,12 +101,9 @@ async def run_code(request: RunRequest):
             QUEUE_SIZE.set(current_waiting)
             CONCURRENT_REQUESTS.inc()
             
-            start_time = time.time()
-            
             loop = asyncio.get_event_loop()
             runner = ExecutorFactory.get_runner(request.language)
             
-            # 执行代码，不再传递 obj 参数
             result = await loop.run_in_executor(
                 executor_pool, 
                 runner.run, 
@@ -93,6 +115,10 @@ async def run_code(request: RunRequest):
             REQUEST_DURATION.labels(language=request.language).observe(duration)
             
             CONCURRENT_REQUESTS.dec()
+            
+            is_success = result.get("success", False)
+            status = "SUCCESS" if is_success else "EXECUTION_ERROR"
+            logger.info(f"Request: language={request.language}, duration={duration:.4f}s, status={status}, error={result.get('error', '')}")
             
             return RunResponse(
                 code=0,
@@ -107,6 +133,7 @@ async def run_code(request: RunRequest):
             current_waiting -= 1
             QUEUE_SIZE.set(current_waiting)
         CONCURRENT_REQUESTS.set(0)
+        logger.error(f"System Error: {str(e)}")
         return RunResponse(
             code=500, 
             message="Internal Server Error", 
