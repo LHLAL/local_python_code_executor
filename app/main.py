@@ -10,7 +10,7 @@ from fastapi.responses import Response
 from .executor import ExecutorFactory
 from .config import config
 
-app = FastAPI(title="Dify-Compatible Sandbox Executor")
+app = FastAPI(title="Dify-Standard Sandbox Executor")
 
 # Prometheus Metrics
 REQUESTS_TOTAL = Counter("sandbox_requests_total", "Total sandbox requests", ["language", "endpoint"])
@@ -24,10 +24,9 @@ semaphore = asyncio.Semaphore(config["server"]["max_concurrent_requests"])
 current_waiting = 0
 
 class RunRequest(BaseModel):
-    language: str = "python3"  # 对齐 dify-sandbox 使用 language
+    language: str = "python3"
     code: str
-    preload: Optional[str] = "" # 预留支持
-    obj: Optional[str] = None   # Base64 编码的输入
+    preload: Optional[str] = ""
 
 class RunResponseData(BaseModel):
     stdout: str
@@ -53,9 +52,7 @@ async def metrics():
 async def run_code(request: RunRequest):
     global current_waiting
     
-    # 检查 language 是否支持
     if request.language not in config["runtimes"]:
-        # 尝试兼容性映射
         if request.language == "python" and "python3" in config["runtimes"]:
             request.language = "python3"
         else:
@@ -65,7 +62,6 @@ async def run_code(request: RunRequest):
                 data=RunResponseData(stdout="", error=f"Unsupported language: {request.language}")
             )
 
-    # 队列长度检查
     if current_waiting >= config["server"]["max_queue_size"]:
         raise HTTPException(status_code=429, detail="Too Many Requests: Queue Full")
 
@@ -82,16 +78,14 @@ async def run_code(request: RunRequest):
             
             start_time = time.time()
             
-            # 使用线程池运行阻塞的执行器
             loop = asyncio.get_event_loop()
             runner = ExecutorFactory.get_runner(request.language)
             
-            # 执行代码
+            # 执行代码，不再传递 obj 参数
             result = await loop.run_in_executor(
                 executor_pool, 
                 runner.run, 
                 request.code, 
-                request.obj, 
                 request.language
             )
             
@@ -112,7 +106,7 @@ async def run_code(request: RunRequest):
         if current_waiting > 0:
             current_waiting -= 1
             QUEUE_SIZE.set(current_waiting)
-        CONCURRENT_REQUESTS.set(0) # 重置并发计数
+        CONCURRENT_REQUESTS.set(0)
         return RunResponse(
             code=500, 
             message="Internal Server Error", 

@@ -14,7 +14,7 @@ runtimes:
     enabled: true
     allowed_packages: ["json", "base64", "math", "time", "requests"]
   nodejs:
-    command: "/usr/bin/node"
+    command: "/home/ubuntu/.nvm/versions/node/v22.13.0/bin/node"
     enabled: true
     allowed_packages: ["fs", "path", "crypto", "buffer", "util"]
 

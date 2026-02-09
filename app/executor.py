@@ -18,6 +18,7 @@ def set_resource_limits(is_nodejs=False):
     cpu_limit = limits["cpu_time_limit"]
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit + 2))
     
+    # 调大内存限制以适应多语言运行时
     mem_limit = max(limits["memory_limit_mb"], 1024) * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
     
@@ -51,6 +52,7 @@ class SecurityChecker:
     @staticmethod
     def check_nodejs_imports(code: str, allowed: List[str]) -> Optional[str]:
         allowed_set = set(allowed)
+        # 匹配 require, import, 动态 import
         require_matches = re.findall(r"require\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", code)
         import_matches = re.findall(r"from\s*['\"]([^'\"]+)['\"]", code)
         dynamic_import_matches = re.findall(r"import\s*\(\s*['\"]([^'\"]+)['\"]\s*\)", code)
@@ -63,135 +65,52 @@ class SecurityChecker:
         return None
 
 class BaseRunner:
-    def run(self, code: str, obj_base64: Optional[str], language: str) -> Dict[str, Any]:
+    def run(self, code: str, language: str) -> Dict[str, Any]:
         raise NotImplementedError
 
+    def _execute_subprocess(self, args, is_nodejs=False):
+        timeout = config["resource_limits"]["timeout"]
+        try:
+            process = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                preexec_fn=lambda: set_resource_limits(is_nodejs)
+            )
+            stdout, stderr = process.communicate(timeout=timeout)
+            return {
+                "stdout": stdout,
+                "error": stderr,
+                "success": process.returncode == 0
+            }
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return {"stdout": "", "error": "Timeout", "success": False}
+        except Exception as e:
+            return {"stdout": "", "error": str(e), "success": False}
+
 class PythonRunner(BaseRunner):
-    def run(self, code: str, obj_base64: Optional[str], language: str) -> Dict[str, Any]:
+    def run(self, code: str, language: str) -> Dict[str, Any]:
         allowed = config["runtimes"].get(language, {}).get("allowed_packages", [])
         error = SecurityChecker.check_python_imports(code, allowed)
         if error:
             return {"stdout": "", "error": error, "success": False}
 
         cmd = config["runtimes"].get(language, {}).get("command", "python3")
-        indented_code = "\n    ".join(code.splitlines())
-        wrapper_script = """
-import base64
-import json
-import sys
-
-def run_user_code():
-    # 用户定义的代码
-    {user_code}
-    
-    obj_base64 = "{obj_b64}"
-    obj = None
-    if obj_base64:
-        try:
-            decoded = base64.b64decode(obj_base64).decode('utf-8')
-            obj = json.loads(decoded)
-        except Exception as e:
-            print(f"Error decoding input: {e}", file=sys.stderr)
-            return
-
-    # 调用 main(obj)
-    if 'main' in locals():
-        try:
-            result = main(obj)
-            if result is not None:
-                print(result)
-        except Exception as e:
-            print(f"Error in main(obj): {e}", file=sys.stderr)
-            raise e
-    else:
-        # 如果没有 main 函数，直接执行的代码已经运行了
-        pass
-
-if __name__ == "__main__":
-    run_user_code()
-""".replace("{user_code}", indented_code).replace("{obj_b64}", obj_base64 or "")
-        return self._execute_subprocess([cmd, "-c", wrapper_script], is_nodejs=False)
-
-    def _execute_subprocess(self, args, is_nodejs=False):
-        timeout = config["resource_limits"]["timeout"]
-        try:
-            process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                preexec_fn=lambda: set_resource_limits(is_nodejs)
-            )
-            stdout, stderr = process.communicate(timeout=timeout)
-            return {
-                "stdout": stdout,
-                "error": stderr,
-                "success": process.returncode == 0
-            }
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return {"stdout": "", "error": "Timeout", "success": False}
-        except Exception as e:
-            return {"stdout": "", "error": str(e), "success": False}
+        # 直接执行用户代码，不再进行包装
+        return self._execute_subprocess([cmd, "-c", code], is_nodejs=False)
 
 class NodeJSRunner(BaseRunner):
-    def run(self, code: str, obj_base64: Optional[str], language: str) -> Dict[str, Any]:
+    def run(self, code: str, language: str) -> Dict[str, Any]:
         allowed = config["runtimes"].get(language, {}).get("allowed_packages", [])
         error = SecurityChecker.check_nodejs_imports(code, allowed)
         if error:
             return {"stdout": "", "error": error, "success": False}
 
         cmd = config["runtimes"].get(language, {}).get("command", "node")
-        wrapper_script = """
-const base64 = "{obj_b64}";
-let obj = null;
-if (base64) {
-    try {
-        obj = JSON.parse(Buffer.from(base64, 'base64').toString('utf-8'));
-    } catch (e) {
-        process.stderr.write("Error decoding input: " + e + "\\n");
-    }
-}
-
-// 用户代码
-{user_code}
-
-async function run() {
-    if (typeof main === 'function') {
-        try {
-            const result = await main(obj);
-            if (result !== undefined) console.log(result);
-        } catch (e) {
-            process.stderr.write("Error in main(obj): " + e + "\\n");
-            process.exit(1);
-        }
-    }
-}
-run();
-""".replace("{user_code}", code).replace("{obj_b64}", obj_base64 or "")
-        return self._execute_subprocess([cmd, "-e", wrapper_script], is_nodejs=True)
-
-    def _execute_subprocess(self, args, is_nodejs=False):
-        timeout = config["resource_limits"]["timeout"]
-        try:
-            process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                preexec_fn=lambda: set_resource_limits(is_nodejs)
-            )
-            stdout, stderr = process.communicate(timeout=timeout)
-            return {
-                "stdout": stdout,
-                "error": stderr,
-                "success": process.returncode == 0
-            }
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return {"stdout": "", "error": "Timeout", "success": False}
-        except Exception as e:
-            return {"stdout": "", "error": str(e), "success": False}
+        # 直接执行用户代码
+        return self._execute_subprocess([cmd, "-e", code], is_nodejs=True)
 
 class ExecutorFactory:
     @staticmethod
