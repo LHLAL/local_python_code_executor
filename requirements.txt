@@ -5,3 +5,5 @@ prometheus_client
 gunicorn
 uvloop
 PyYAML
+granian
+httpx

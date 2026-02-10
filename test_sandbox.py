@@ -90,7 +90,7 @@ console.log(main(obj));
                 return None
         
         results = []
-        threads = [threading.Thread(target=lambda: results.append(send_req())) for _ in range(100)]
+        threads = [threading.Thread(target=lambda: results.append(send_req())) for _ in range(200)]
         for t in threads: t.start()
         for t in threads: t.join()
         

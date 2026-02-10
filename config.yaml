@@ -1,18 +1,17 @@
 server:
   port: 8000
   workers: 4
-  max_concurrent_requests: 10
-  max_queue_size: 20
+  max_concurrent_requests: 20
+  max_queue_size: 50
+  log_path: "/home/ubuntu/py-sandbox-executor/sandbox.log"
+  # 可选: uvicorn, granian
+  engine: "granian"
 
 runtimes:
   python3:
     command: "/usr/bin/python3"
     enabled: true
     allowed_packages: ["json", "base64", "math", "time", "requests", "re", "ast"]
-  python310:
-    command: "/usr/bin/python3"
-    enabled: true
-    allowed_packages: ["json", "base64", "math", "time", "requests"]
   nodejs:
     command: "/home/ubuntu/.nvm/versions/node/v22.13.0/bin/node"
     enabled: true
