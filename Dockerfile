@@ -2,7 +2,6 @@
 # 示例：FROM your-custom-python310-base-image:latest
 FROM registry.access.redhat.com/ubi8/ubi:latest
 
-LABEL maintainer="Manus Sandbox Team"
 
 WORKDIR /app
 
